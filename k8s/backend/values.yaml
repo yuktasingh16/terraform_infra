@@ -1,0 +1,39 @@
+replicaCount: 2
+
+image:
+  repository: 123456789012.dkr.ecr.ap-south-1.amazonaws.com/letstype-backend
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  cpuUtilization: 70
+  memoryUtilization: 80
+
+env:
+  NODE_ENV: production
+  PORT: "3000"
+
+  DB_HOST: "REPLACE_WITH_RDS_ENDPOINT"
+  DB_PORT: "5432"
+  DB_NAME: "letstype"
+  DB_USER: "postgres"
+  DB_PASSWORD: "LetsType@123"
+
+  JWT_SECRET: "lets-type-secret"
