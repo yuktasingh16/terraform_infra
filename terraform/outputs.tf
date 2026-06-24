@@ -1,21 +1,27 @@
 output "vpc_id" {
-  value = aws_vpc.main.id
+  value = module.network.vpc_id
 }
 
 output "public_subnet_ids" {
-  value = [
-    aws_subnet.public_a.id,
-    aws_subnet.public_b.id
-  ]
+  value = module.network.public_subnet_ids
 }
 
 output "private_subnet_ids" {
-  value = [
-    aws_subnet.private_a.id,
-    aws_subnet.private_b.id
-  ]
+  value = module.network.private_subnet_ids
 }
 
 output "rds_endpoint" {
-  value = aws_db_instance.postgres.endpoint
+  value = module.rds.rds_endpoint
+}
+
+output "eks_cluster_name" {
+  value = module.eks.cluster_name
+}
+
+output "frontend_ecr_repository_url" {
+  value = module.ecr.frontend_repository_url
+}
+
+output "backend_ecr_repository_url" {
+  value = module.ecr.backend_repository_url
 }
