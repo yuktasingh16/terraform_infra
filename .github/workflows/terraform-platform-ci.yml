@@ -1,0 +1,126 @@
+name: Platform CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/platform/**"
+      - "terraform/modules/eks/**"
+      - "terraform/modules/nodegroup/**"
+      - ".github/workflows/terraform-platform-ci.yml"
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_WORKING_DIR: terraform/platform
+  TF_PLAN_NAME: platform
+
+jobs:
+  plan:
+    name: Validate and plan platform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Terraform providers and modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.terraform.d/plugin-cache
+            ${{ env.TF_WORKING_DIR }}/.terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles('terraform/platform/**/*.tf', 'terraform/platform/**/*.tfvars', 'terraform/platform/**/*.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - name: Configure Terraform plugin cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir="$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+
+      - name: Terraform fmt check
+        run: |
+          terraform fmt -check -recursive terraform/platform
+          terraform fmt -check -recursive terraform/modules/eks
+          terraform fmt -check -recursive terraform/modules/nodegroup
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-platform-plan
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate -no-color
+
+      - name: Check foundation remote state
+        id: foundation_state
+        continue-on-error: true
+        run: |
+          aws s3api head-object --bucket letstype-terraform-state --key terraform/foundation.tfstate >/dev/null
+
+      - name: Terraform plan
+        if: steps.foundation_state.outcome == 'success'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Write placeholder plan when foundation state is unavailable
+        if: steps.foundation_state.outcome != 'success'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "Terraform plan skipped because the foundation remote state is not available yet." > plan.txt
+          touch tfplan
+
+      - name: Upload Terraform plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-${{ env.TF_PLAN_NAME }}-plan
+          path: |
+            ${{ env.TF_WORKING_DIR }}/tfplan
+            ${{ env.TF_WORKING_DIR }}/plan.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync(`${process.env.TF_WORKING_DIR}/plan.txt`, 'utf8');
+            const maxLength = 45000;
+            const body = [
+              '## Terraform platform plan',
+              '',
+              plan.length > maxLength
+                ? `Plan is too large to show completely. Download the artifact \`terraform-${process.env.TF_PLAN_NAME}-plan\` for the full plan.\n\n\`\`\`terraform\n${plan.slice(0, maxLength)}\n...\n\`\`\``
+                : `\`\`\`terraform\n${plan}\n\`\`\``
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
