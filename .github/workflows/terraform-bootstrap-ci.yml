@@ -1,0 +1,82 @@
+name: Terraform Bootstrap CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/bootstrap/**"
+      - ".github/workflows/terraform-bootstrap-ci.yml"
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: 1.15.7
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_WORKING_DIR: terraform/bootstrap
+  TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
+
+jobs:
+  bootstrap-ci:
+    name: Validate Bootstrap
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: terraform-bootstrap-ci-${{ github.event.pull_request.number || github.ref_name }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Verify Terraform version
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform version
+
+      - name: Create Terraform plugin cache directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-bootstrap-${{ hashFiles('terraform/bootstrap/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-bootstrap-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-
+
+      - name: Terraform format check
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive terraform/bootstrap
+
+      - name: Terraform init for validation
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform validate -no-color

@@ -1,12 +1,9 @@
 replicaCount: 2
 
 image:
-  repository: REPLACE_WITH_ECR_REPOSITORY
-  tag: REPLACE_WITH_IMAGE_TAG
+  repository: lakshya0612/letstype-backend
+  tag: latest
   pullPolicy: Always
-
-# Use a digestable CI tag like `${{ github.sha }}` or a build number.
-# Avoid `latest` when the ECR repo is immutable.
 
 service:
   type: ClusterIP

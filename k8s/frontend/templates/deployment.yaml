@@ -17,7 +17,6 @@ spec:
     spec:
       containers:
         - name: frontend
-          # FIX: Dynamically link to your AWS ECR path configured in values.yaml
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:

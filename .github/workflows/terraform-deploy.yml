@@ -1,6 +1,7 @@
 name: Terraform Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -22,7 +23,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  TF_VERSION: 1.15.4
+  TERRAFORM_VERSION: 1.15.7
   TF_IN_AUTOMATION: true
   TF_INPUT: false
   TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
@@ -35,6 +36,7 @@ jobs:
   foundation:
     name: Deploy Foundation
     runs-on: ubuntu-latest
+    environment: terraform-foundation
 
     env:
       TF_WORKING_DIR: terraform/foundation
@@ -49,7 +51,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Create Terraform plugin cache directory
@@ -62,10 +64,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-          key: ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-foundation-${{ hashFiles('terraform/foundation/.terraform.lock.hcl') }}
+          key: ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-foundation-${{ hashFiles('terraform/foundation/.terraform.lock.hcl') }}
           restore-keys: |
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-foundation-
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-foundation-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-
 
       - name: Terraform format check
         shell: bash
@@ -76,6 +78,20 @@ jobs:
           terraform fmt -check -recursive terraform/modules/network
           terraform fmt -check -recursive terraform/modules/iam
           terraform fmt -check -recursive terraform/modules/ecr
+
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -92,22 +108,23 @@ jobs:
           echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
 
-      - name: Verify Terraform state bucket access
+      - name: Verify Terraform backend access
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Checking S3 bucket access ==="
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
 
-          if ! aws s3api head-bucket \
-            --bucket letstype-terraform-state
-          then
-            echo "::error::GitHub Actions IAM role cannot access S3 bucket letstype-terraform-state."
-            echo "::error::Check AWS_ROLE_ARN, IAM permissions, bucket policy, permissions boundary, and SCP."
-            exit 1
-          fi
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
 
-          echo "Terraform state bucket is accessible."
+          echo "Terraform S3 backend access verified."
 
       - name: Diagnose Foundation state access
         shell: bash
@@ -201,6 +218,7 @@ jobs:
   platform:
     name: Deploy Platform
     runs-on: ubuntu-latest
+    environment: terraform-platform
 
     needs:
       - foundation
@@ -218,7 +236,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Create Terraform plugin cache directory
@@ -231,10 +249,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-          key: ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-platform-${{ hashFiles('terraform/platform/.terraform.lock.hcl') }}
+          key: ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-platform-${{ hashFiles('terraform/platform/.terraform.lock.hcl') }}
           restore-keys: |
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-platform-
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-platform-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-
 
       - name: Terraform format check
         shell: bash
@@ -244,6 +262,20 @@ jobs:
           terraform fmt -check -recursive terraform/platform
           terraform fmt -check -recursive terraform/modules/eks
           terraform fmt -check -recursive terraform/modules/nodegroup
+
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -259,6 +291,24 @@ jobs:
 
           echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
+
+      - name: Verify Terraform backend access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
 
       - name: Verify Foundation remote state exists
         shell: bash
@@ -334,6 +384,7 @@ jobs:
   database:
     name: Deploy Database
     runs-on: ubuntu-latest
+    environment: terraform-database
 
     needs:
       - platform
@@ -352,7 +403,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Create Terraform plugin cache directory
@@ -365,10 +416,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-          key: ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-database-${{ hashFiles('terraform/database/.terraform.lock.hcl') }}
+          key: ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-database-${{ hashFiles('terraform/database/.terraform.lock.hcl') }}
           restore-keys: |
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-database-
-            ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-database-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-
 
       - name: Terraform format check
         shell: bash
@@ -377,6 +428,34 @@ jobs:
 
           terraform fmt -check -recursive terraform/database
           terraform fmt -check -recursive terraform/modules/rds
+
+      - name: Verify DB password secret is configured
+        shell: bash
+        env:
+          DB_PASSWORD_CHECK: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DB_PASSWORD_CHECK}" ]; then
+            echo "::error::DB_PASSWORD GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "DB_PASSWORD secret is configured."
+
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -392,6 +471,24 @@ jobs:
 
           echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
+
+      - name: Verify Terraform backend access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
 
       - name: Verify Foundation remote state exists
         shell: bash
