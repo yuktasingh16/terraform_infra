@@ -1,0 +1,187 @@
+name: Terraform Foundation CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/foundation/**"
+      - "terraform/modules/network/**"
+      - "terraform/modules/iam/**"
+      - "terraform/modules/ecr/**"
+      - ".github/workflows/terraform-foundation-ci.yml"
+      - ".github/workflows/terraform-deploy.yml"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: 1.15.4
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_WORKING_DIR: terraform/foundation
+  TF_PLAN_NAME: foundation
+  TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
+
+jobs:
+  foundation-ci:
+    name: Validate and Plan Foundation
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: terraform-foundation-ci-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Verify Terraform version
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform version
+
+      - name: Create Terraform plugin cache directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-foundation-${{ hashFiles('terraform/foundation/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-foundation-
+            ${{ runner.os }}-terraform-${{ env.TERRAFORM_VERSION }}-
+
+      - name: Terraform format check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          terraform fmt -check -recursive terraform/foundation
+          terraform fmt -check -recursive terraform/modules/network
+          terraform fmt -check -recursive terraform/modules/iam
+          terraform fmt -check -recursive terraform/modules/ecr
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-foundation-ci
+
+      - name: Verify AWS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform validate -no-color
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          terraform plan \
+            -input=false \
+            -lock-timeout=5m \
+            -no-color \
+            -out=tfplan
+
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Upload Terraform plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-${{ env.TF_PLAN_NAME }}-plan-${{ github.event.pull_request.number }}
+          path: |
+            ${{ env.TF_WORKING_DIR }}/tfplan
+            ${{ env.TF_WORKING_DIR }}/plan.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Comment Terraform plan on PR
+        uses: actions/github-script@v7
+        env:
+          PLAN_FILE: ${{ env.TF_WORKING_DIR }}/plan.txt
+        with:
+          script: |
+            const fs = require('fs');
+
+            const plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
+            const marker = '<!-- terraform-foundation-plan -->';
+            const maxLength = 45000;
+
+            const displayedPlan =
+              plan.length > maxLength
+                ? `${plan.slice(0, maxLength)}\n\n... Plan truncated. Download the workflow artifact for the complete plan.`
+                : plan;
+
+            const body = [
+              marker,
+              '## Terraform Foundation Plan',
+              '',
+              '```terraform',
+              displayedPlan,
+              '```'
+            ].join('\n');
+
+            const { data: comments } =
+              await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100
+              });
+
+            const existingComment = comments.find(
+              comment =>
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes(marker)
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }

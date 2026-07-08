@@ -1,7 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: 123456789012.dkr.ecr.ap-south-1.amazonaws.com/letstype-frontend
+  repository: 793010745635.dkr.ecr.ap-south-1.amazonaws.com/letstype-frontend
   tag: latest
   pullPolicy: Always
 
