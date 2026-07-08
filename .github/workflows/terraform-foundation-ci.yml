@@ -116,11 +116,11 @@ jobs:
           set -euo pipefail
 
           aws s3api head-bucket \
-            --bucket letstype-terraform-state \
+            --bucket letstype-terraform-state-793010745635 \
             --region "${AWS_REGION}"
 
           aws s3api list-objects-v2 \
-            --bucket letstype-terraform-state \
+            --bucket letstype-terraform-state-793010745635 \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
