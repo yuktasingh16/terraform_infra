@@ -97,6 +97,8 @@ data "aws_iam_policy_document" "github_actions_terraform_state" {
       variable = "s3:prefix"
 
       values = [
+        "terraform",
+        "terraform/",
         "terraform/*"
       ]
     }

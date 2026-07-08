@@ -113,16 +113,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: letstype-terraform-state"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
+          if ! output=$(aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
             --bucket letstype-terraform-state \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
@@ -297,16 +311,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: letstype-terraform-state"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
+          if ! output=$(aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
             --bucket letstype-terraform-state \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
@@ -477,16 +505,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: letstype-terraform-state"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
+          if ! output=$(aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
             --bucket letstype-terraform-state \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
