@@ -27,16 +27,90 @@ env:
   TF_IN_AUTOMATION: true
   TF_INPUT: false
   TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
+  TF_STATE_BUCKET: letstype-terraform-state-793010745635
 
 concurrency:
   group: terraform-deploy-main
   cancel-in-progress: false
 
 jobs:
+  bootstrap-backend:
+    name: Bootstrap Terraform Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-backend-bootstrap
+
+      - name: Verify AWS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+
+      - name: Create backend bucket if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking Terraform backend bucket: ${TF_STATE_BUCKET}"
+
+          set +e
+          output=$(aws s3api head-bucket --bucket "${TF_STATE_BUCKET}" --region "${AWS_REGION}" 2>&1)
+          status=$?
+          set -e
+
+          if [ "${status}" -eq 0 ]; then
+            echo "Backend bucket already exists and is accessible."
+          else
+            echo "${output}"
+            echo "Backend bucket is missing or inaccessible. Attempting to create it in ${AWS_REGION}."
+
+            if [ "${AWS_REGION}" = "us-east-1" ]; then
+              aws s3api create-bucket \
+                --bucket "${TF_STATE_BUCKET}" \
+                --region "${AWS_REGION}"
+            else
+              aws s3api create-bucket \
+                --bucket "${TF_STATE_BUCKET}" \
+                --region "${AWS_REGION}" \
+                --create-bucket-configuration "LocationConstraint=${AWS_REGION}"
+            fi
+          fi
+
+      - name: Configure backend bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api wait bucket-exists \
+            --bucket "${TF_STATE_BUCKET}"
+
+          aws s3api put-bucket-versioning \
+            --bucket "${TF_STATE_BUCKET}" \
+            --versioning-configuration Status=Enabled
+
+          aws s3api put-bucket-encryption \
+            --bucket "${TF_STATE_BUCKET}" \
+            --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+          aws s3api put-public-access-block \
+            --bucket "${TF_STATE_BUCKET}" \
+            --public-access-block-configuration 'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
+
+          echo "Terraform backend bucket is ready."
+
   foundation:
     name: Deploy Foundation
     runs-on: ubuntu-latest
     environment: terraform-foundation
+
+    needs:
+      - bootstrap-backend
 
     env:
       TF_WORKING_DIR: terraform/foundation
@@ -113,16 +187,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: ${TF_STATE_BUCKET}"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
-            --bucket letstype-terraform-state \
+          if ! output=$(aws s3api head-bucket \
+            --bucket "${TF_STATE_BUCKET}" \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
+            --bucket "${TF_STATE_BUCKET}" \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
@@ -132,11 +220,11 @@ jobs:
           set -euo pipefail
 
           echo "=== Checking Foundation state object ==="
-          echo "Expected: s3://letstype-terraform-state/terraform/foundation.tfstate"
+          echo "Expected: s3://${TF_STATE_BUCKET}/terraform/foundation.tfstate"
 
           set +e
           output=$(aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
             2>&1)
@@ -208,7 +296,7 @@ jobs:
           set -euo pipefail
 
           aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null
@@ -297,16 +385,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: ${TF_STATE_BUCKET}"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
-            --bucket letstype-terraform-state \
+          if ! output=$(aws s3api head-bucket \
+            --bucket "${TF_STATE_BUCKET}" \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
+            --bucket "${TF_STATE_BUCKET}" \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
@@ -318,13 +420,13 @@ jobs:
           echo "=== Verifying Foundation dependency ==="
 
           if ! aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null
           then
             echo "::error::Foundation remote state is missing or inaccessible."
-            echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
+            echo "::error::Expected s3://${TF_STATE_BUCKET}/terraform/foundation.tfstate"
             exit 1
           fi
 
@@ -374,7 +476,7 @@ jobs:
           set -euo pipefail
 
           aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/platform.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null
@@ -477,16 +579,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          aws s3api head-bucket \
-            --bucket letstype-terraform-state \
-            --region "${AWS_REGION}"
+          echo "=== Checking Terraform backend bucket ==="
+          echo "Bucket: ${TF_STATE_BUCKET}"
+          echo "Prefix: terraform/"
 
-          aws s3api list-objects-v2 \
-            --bucket letstype-terraform-state \
+          if ! output=$(aws s3api head-bucket \
+            --bucket "${TF_STATE_BUCKET}" \
+            --region "${AWS_REGION}" 2>&1)
+          then
+            echo "${output}"
+            echo "::error::Cannot access Terraform state bucket. Confirm AWS_ROLE_ARN points to the IAM role with s3:ListBucket and s3:GetBucketLocation on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
+
+          if ! output=$(aws s3api list-objects-v2 \
+            --bucket "${TF_STATE_BUCKET}" \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
-            > /dev/null
+            2>&1 >/dev/null)
+          then
+            echo "${output}"
+            echo "::error::Cannot list Terraform state prefix. Confirm the IAM role allows s3:ListBucket for prefix terraform/ on arn:aws:s3:::letstype-terraform-state-793010745635."
+            exit 1
+          fi
 
           echo "Terraform S3 backend access verified."
 
@@ -496,13 +612,13 @@ jobs:
           set -euo pipefail
 
           if ! aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null
           then
             echo "::error::Foundation remote state is missing or inaccessible."
-            echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
+            echo "::error::Expected s3://${TF_STATE_BUCKET}/terraform/foundation.tfstate"
             exit 1
           fi
 
@@ -514,13 +630,13 @@ jobs:
           set -euo pipefail
 
           if ! aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/platform.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null
           then
             echo "::error::Platform remote state is missing or inaccessible."
-            echo "::error::Expected s3://letstype-terraform-state/terraform/platform.tfstate"
+            echo "::error::Expected s3://${TF_STATE_BUCKET}/terraform/platform.tfstate"
             exit 1
           fi
 
@@ -570,7 +686,7 @@ jobs:
           set -euo pipefail
 
           aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket "${TF_STATE_BUCKET}" \
             --key terraform/database.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null

@@ -4,7 +4,7 @@ The platform Terraform configuration reads outputs from the foundation stack thr
 
 To make the platform plan work, the foundation stack must first be applied so that the state object exists in S3 at:
 
-- bucket: `letstype-terraform-state`
+- bucket: `letstype-terraform-state-793010745635`
 - key: `terraform/foundation.tfstate`
 
 ## Local bootstrap steps

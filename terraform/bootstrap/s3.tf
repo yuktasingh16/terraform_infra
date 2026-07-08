@@ -1,10 +1,10 @@
 resource "aws_s3_bucket" "terraform_state" {
 
-  bucket = "letstype-terraform-state"
+  bucket = "letstype-terraform-state-793010745635"
 
   tags = {
 
-    Name = "letstype-terraform-state"
+    Name = "letstype-terraform-state-793010745635"
 
     Environment = "shared"
 

@@ -114,11 +114,11 @@ jobs:
           set -euo pipefail
 
           aws s3api head-bucket \
-            --bucket letstype-terraform-state \
+            --bucket letstype-terraform-state-793010745635 \
             --region "${AWS_REGION}"
 
           aws s3api list-objects-v2 \
-            --bucket letstype-terraform-state \
+            --bucket letstype-terraform-state-793010745635 \
             --prefix terraform/ \
             --max-items 1 \
             --region "${AWS_REGION}" \
@@ -133,13 +133,13 @@ jobs:
           set -euo pipefail
 
           if ! aws s3api head-object \
-            --bucket letstype-terraform-state \
+            --bucket letstype-terraform-state-793010745635 \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
             > /dev/null 2>&1
           then
             echo "::error::Foundation remote state is missing."
-            echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
+            echo "::error::Expected s3://letstype-terraform-state-793010745635/terraform/foundation.tfstate"
             exit 1
           fi
 
