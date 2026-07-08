@@ -1,6 +1,7 @@
 name: Terraform Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -22,7 +23,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  TERRAFORM_VERSION: 1.15.4
+  TERRAFORM_VERSION: 1.15.7
   TF_IN_AUTOMATION: true
   TF_INPUT: false
   TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
@@ -35,6 +36,7 @@ jobs:
   foundation:
     name: Deploy Foundation
     runs-on: ubuntu-latest
+    environment: terraform-foundation
 
     env:
       TF_WORKING_DIR: terraform/foundation
@@ -82,6 +84,20 @@ jobs:
           terraform fmt -check -recursive terraform/modules/iam
           terraform fmt -check -recursive terraform/modules/ecr
 
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -94,6 +110,24 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity
+
+      - name: Verify Terraform backend access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
 
       - name: Terraform init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -154,6 +188,7 @@ jobs:
   platform:
     name: Deploy Platform
     runs-on: ubuntu-latest
+    environment: terraform-platform
 
     needs:
       - foundation
@@ -203,6 +238,20 @@ jobs:
           terraform fmt -check -recursive terraform/modules/eks
           terraform fmt -check -recursive terraform/modules/nodegroup
 
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -215,6 +264,24 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity
+
+      - name: Verify Terraform backend access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
 
       - name: Verify Foundation remote state exists
         shell: bash
@@ -275,6 +342,7 @@ jobs:
   database:
     name: Deploy Database
     runs-on: ubuntu-latest
+    environment: terraform-database
 
     needs:
       - platform
@@ -338,6 +406,20 @@ jobs:
 
           echo "DB_PASSWORD secret is configured."
 
+      - name: Verify AWS role secret is configured
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -350,6 +432,24 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity
+
+      - name: Verify Terraform backend access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
 
       - name: Verify Foundation remote state exists
         shell: bash

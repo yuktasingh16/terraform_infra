@@ -9,3 +9,9 @@ output "terraform_lock_table" {
   value = aws_dynamodb_table.terraform_lock.name
 
 }
+
+output "github_actions_role_arn" {
+
+  value = aws_iam_role.github_actions_terraform.arn
+
+}

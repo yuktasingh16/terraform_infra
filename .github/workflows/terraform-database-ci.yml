@@ -1,6 +1,7 @@
 name: Terraform Database CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -13,11 +14,11 @@ on:
 permissions:
   contents: read
   id-token: write
-  pull-requests: write
+  pull-requests: read
 
 env:
   AWS_REGION: us-east-1
-  TERRAFORM_VERSION: 1.15.4
+  TERRAFORM_VERSION: 1.15.7
   TF_IN_AUTOMATION: true
   TF_INPUT: false
   TF_WORKING_DIR: terraform/database
@@ -31,14 +32,14 @@ jobs:
     runs-on: ubuntu-latest
 
     concurrency:
-      group: terraform-database-ci-${{ github.event.pull_request.number }}
+      group: terraform-database-ci-${{ github.event.pull_request.number || github.ref_name }}
       cancel-in-progress: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -76,6 +77,7 @@ jobs:
           terraform fmt -check -recursive terraform/modules/rds
 
       - name: Verify DB password secret is configured
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           DB_PASSWORD_CHECK: ${{ secrets.DB_PASSWORD }}
@@ -89,7 +91,23 @@ jobs:
 
           echo "DB_PASSWORD secret is configured."
 
+      - name: Verify AWS role secret is configured
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          AWS_ROLE_ARN_CHECK: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ROLE_ARN_CHECK}" ]; then
+            echo "::error::AWS_ROLE_ARN GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+          echo "AWS_ROLE_ARN secret is configured."
+
       - name: Configure AWS credentials
+        if: github.event_name != 'pull_request'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
@@ -97,12 +115,33 @@ jobs:
           role-session-name: github-actions-database-ci
 
       - name: Verify AWS identity
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
           aws sts get-caller-identity
 
+      - name: Verify Terraform backend access
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-bucket \
+            --bucket letstype-terraform-state \
+            --region "${AWS_REGION}"
+
+          aws s3api list-objects-v2 \
+            --bucket letstype-terraform-state \
+            --prefix terraform/ \
+            --max-items 1 \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Terraform S3 backend access verified."
+
       - name: Verify Foundation remote state exists
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -120,7 +159,16 @@ jobs:
 
           echo "Foundation remote state exists."
 
-      - name: Terraform init
+      - name: Terraform init for pull request validation
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform init -backend=false -input=false
+
+      - name: Terraform init for cloud plan
+        if: github.event_name != 'pull_request'
         working-directory: ${{ env.TF_WORKING_DIR }}
         shell: bash
         run: |
@@ -135,6 +183,7 @@ jobs:
           terraform validate -no-color
 
       - name: Terraform plan
+        if: github.event_name != 'pull_request'
         working-directory: ${{ env.TF_WORKING_DIR }}
         shell: bash
         run: |
@@ -149,68 +198,10 @@ jobs:
           terraform show -no-color tfplan > plan.txt
 
       - name: Upload Terraform plan
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-${{ env.TF_PLAN_NAME }}-plan-${{ github.event.pull_request.number }}
-          path: |
-            ${{ env.TF_WORKING_DIR }}/tfplan
-            ${{ env.TF_WORKING_DIR }}/plan.txt
+          name: terraform-${{ env.TF_PLAN_NAME }}-plan-${{ github.event.pull_request.number || github.run_number }}
+          path: ${{ env.TF_WORKING_DIR }}/plan.txt
           retention-days: 14
           if-no-files-found: error
-
-      - name: Comment Terraform plan on PR
-        uses: actions/github-script@v7
-        env:
-          PLAN_FILE: ${{ env.TF_WORKING_DIR }}/plan.txt
-        with:
-          script: |
-            const fs = require('fs');
-
-            const plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
-            const marker = '<!-- terraform-database-plan -->';
-            const maxLength = 45000;
-
-            const displayedPlan =
-              plan.length > maxLength
-                ? `${plan.slice(0, maxLength)}\n\n... Plan truncated. Download the workflow artifact for the complete plan.`
-                : plan;
-
-            const body = [
-              marker,
-              '## Terraform Database Plan',
-              '',
-              '```terraform',
-              displayedPlan,
-              '```'
-            ].join('\n');
-
-            const { data: comments } =
-              await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                per_page: 100
-              });
-
-            const existingComment = comments.find(
-              comment =>
-                comment.user.type === 'Bot' &&
-                comment.body &&
-                comment.body.includes(marker)
-            );
-
-            if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body
-              });
-            }
