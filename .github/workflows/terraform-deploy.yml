@@ -46,18 +46,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
-
-      - name: Verify Terraform version
-        shell: bash
-        run: |
-          set -euo pipefail
-          terraform version
 
       - name: Create Terraform plugin cache directory
         shell: bash
@@ -105,10 +100,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: github-actions-foundation-deploy
 
-      - name: Verify AWS identity
+      - name: Show AWS identity
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
 
       - name: Verify Terraform backend access
@@ -128,6 +125,44 @@ jobs:
             > /dev/null
 
           echo "Terraform S3 backend access verified."
+
+      - name: Diagnose Foundation state access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Checking Foundation state object ==="
+          echo "Expected: s3://letstype-terraform-state/terraform/foundation.tfstate"
+
+          set +e
+          output=$(aws s3api head-object \
+            --bucket letstype-terraform-state \
+            --key terraform/foundation.tfstate \
+            --region "${AWS_REGION}" \
+            2>&1)
+          status=$?
+          set -e
+
+          if [ "${status}" -eq 0 ]; then
+            echo "Foundation state object exists and is accessible."
+          else
+            echo "${output}"
+
+            if echo "${output}" | grep -Eq "403|Forbidden|AccessDenied"; then
+              echo "::error::Foundation state object access is forbidden."
+              echo "::error::The assumed IAM role needs access to terraform/foundation.tfstate."
+              exit 1
+            fi
+
+            if echo "${output}" | grep -Eq "404|Not Found|NoSuchKey"; then
+              echo "Foundation state does not exist yet."
+              echo "This is acceptable for the first Foundation deployment."
+              echo "Terraform apply will create the state object."
+            else
+              echo "::error::Unexpected error while checking Foundation state."
+              exit 1
+            fi
+          fi
 
       - name: Terraform init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -167,23 +202,18 @@ jobs:
             -auto-approve \
             tfplan
 
-      - name: Verify Foundation remote state after apply
+      - name: Verify Foundation state after apply
         shell: bash
         run: |
           set -euo pipefail
 
-          if ! aws s3api head-object \
+          aws s3api head-object \
             --bucket letstype-terraform-state \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
-            > /dev/null 2>&1
-          then
-            echo "::error::Foundation apply completed but remote state was not found."
-            echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
-            exit 1
-          fi
+            > /dev/null
 
-          echo "Foundation remote state verified successfully."
+          echo "Foundation state verified successfully."
 
   platform:
     name: Deploy Platform
@@ -201,18 +231,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
-
-      - name: Verify Terraform version
-        shell: bash
-        run: |
-          set -euo pipefail
-          terraform version
 
       - name: Create Terraform plugin cache directory
         shell: bash
@@ -259,10 +284,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: github-actions-platform-deploy
 
-      - name: Verify AWS identity
+      - name: Show AWS identity
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
 
       - name: Verify Terraform backend access
@@ -288,18 +315,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "=== Verifying Foundation dependency ==="
+
           if ! aws s3api head-object \
             --bucket letstype-terraform-state \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
-            > /dev/null 2>&1
+            > /dev/null
           then
-            echo "::error::Foundation remote state is missing."
+            echo "::error::Foundation remote state is missing or inaccessible."
             echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
             exit 1
           fi
 
-          echo "Foundation remote state exists."
+          echo "Foundation remote state exists and is accessible."
 
       - name: Terraform init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -339,6 +368,19 @@ jobs:
             -auto-approve \
             tfplan
 
+      - name: Verify Platform state after apply
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-object \
+            --bucket letstype-terraform-state \
+            --key terraform/platform.tfstate \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Platform state verified successfully."
+
   database:
     name: Deploy Database
     runs-on: ubuntu-latest
@@ -356,18 +398,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
-
-      - name: Verify Terraform version
-        shell: bash
-        run: |
-          set -euo pipefail
-          terraform version
 
       - name: Create Terraform plugin cache directory
         shell: bash
@@ -427,10 +464,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: github-actions-database-deploy
 
-      - name: Verify AWS identity
+      - name: Show AWS identity
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=== AWS identity used by GitHub Actions ==="
           aws sts get-caller-identity
 
       - name: Verify Terraform backend access
@@ -460,14 +499,32 @@ jobs:
             --bucket letstype-terraform-state \
             --key terraform/foundation.tfstate \
             --region "${AWS_REGION}" \
-            > /dev/null 2>&1
+            > /dev/null
           then
-            echo "::error::Foundation remote state is missing."
+            echo "::error::Foundation remote state is missing or inaccessible."
             echo "::error::Expected s3://letstype-terraform-state/terraform/foundation.tfstate"
             exit 1
           fi
 
-          echo "Foundation remote state exists."
+          echo "Foundation remote state exists and is accessible."
+
+      - name: Verify Platform remote state exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! aws s3api head-object \
+            --bucket letstype-terraform-state \
+            --key terraform/platform.tfstate \
+            --region "${AWS_REGION}" \
+            > /dev/null
+          then
+            echo "::error::Platform remote state is missing or inaccessible."
+            echo "::error::Expected s3://letstype-terraform-state/terraform/platform.tfstate"
+            exit 1
+          fi
+
+          echo "Platform remote state exists and is accessible."
 
       - name: Terraform init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -506,3 +563,16 @@ jobs:
             -lock-timeout=5m \
             -auto-approve \
             tfplan
+
+      - name: Verify Database state after apply
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws s3api head-object \
+            --bucket letstype-terraform-state \
+            --key terraform/database.tfstate \
+            --region "${AWS_REGION}" \
+            > /dev/null
+
+          echo "Database state verified successfully."
